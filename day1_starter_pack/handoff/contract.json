@@ -1,0 +1,7 @@
+{
+  "network": "Polygon Amoy",
+  "rpc": "https://rpc-amoy.polygon.technology/",
+  "address": "0xeBAdb9C326ce1A5261ae50C6fC321c9c404558FD",
+  "chainId": 80002,
+  "explorer": "https://amoy.polygonscan.com/"
+}
