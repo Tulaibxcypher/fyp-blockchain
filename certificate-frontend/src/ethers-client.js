@@ -1,14 +1,15 @@
 // src/ethers-client.js
 import { ethers } from "ethers";
-import registryMap from "./registry.json";
+import { CHAIN_ID } from "./config";
+import registryMap from "./registry.json"; // { "80002": "0x..." }
 
-// Multiple public RPC fallbacks for Polygon Amoy (80002)
+// ✅ Multiple public RPC fallbacks for Polygon Amoy
 const AMOY_RPCS = [
   "https://rpc-amoy.polygon.technology",
   "https://polygon-amoy-bor-rpc.publicnode.com",
   "https://polygon-amoy.drpc.org",
   "https://rpc.ankr.com/polygon_amoy",
-  "https://polygon-amoy.gateway.tenderly.co" // public gateway (rate limited)
+  "https://polygon-amoy.gateway.tenderly.co"
 ];
 
 const REGISTRY_ABI = [
@@ -16,104 +17,90 @@ const REGISTRY_ABI = [
 ];
 
 const CERT_ABI = [
-  "function certificateExists(string ipfsCid) view returns (bool)",
-  "function verifyByCid(string ipfsCid) view returns (bool,address,string,string,bytes32,uint256)",
-  "function issueCertificate(string,string,string,bytes32) external",
-  "function isIssuer(address) view returns (bool)",
-  "function paused() view returns (bool)",
-  "function issueFeeWei() view returns (uint256)"
+  "function addCertificate(string studentName,string course,string className,string ipfsHash,address issuedTo) external",
+  "function addCertificates(string[] studentNames,string[] courses,string[] classNames,string[] ipfsHashes,address[] issuedTos) external",
+  "function verifyByCid(string ipfsHash) view returns (string studentName,string course,string className,address issuedTo,uint256 issuedAt,bool exists)",
+  "function verifyCertificate(string ipfsHash) view returns (string studentName,string course,string storedHash,uint256 issuedAt,bool exists)"
 ];
 
-async function getMetaMaskBase() {
-  if (!window.ethereum) return null;
-  try {
-    const mm = new ethers.BrowserProvider(window.ethereum);
-    const net = await mm.getNetwork();
-    return { provider: mm, chainId: Number(net.chainId), kind: "metamask" };
-  } catch {
-    return null;
-  }
-}
-
-async function tryRpc(url, timeoutMs = 4000) {
-  const provider = new ethers.JsonRpcProvider(url, { staticNetwork: "80002" });
-  // Manual timeout for getBlockNumber()
-  const p = provider.getBlockNumber();
-  const t = new Promise((_, rej) =>
-    setTimeout(() => rej(new Error("timeout")), timeoutMs)
-  );
-  await Promise.race([p, t]); // throws on timeout
-  const net = await provider.getNetwork();
-  if (Number(net.chainId) !== 80002) {
-    throw new Error(`RPC ${url} is not Amoy (chainId=${net.chainId})`);
-  }
-  return provider;
-}
-
-async function getPublicBase() {
+// 🔧 Try each RPC until one works
+async function createFallbackRpcProvider() {
   const errors = [];
   for (const url of AMOY_RPCS) {
     try {
-      const p = await tryRpc(url);
-      return { provider: p, chainId: 80002, kind: "public", url };
-    } catch (e) {
-      errors.push(`${url}: ${e.message}`);
+      const provider = new ethers.JsonRpcProvider(url, CHAIN_ID);
+      // Simple health check
+      await provider.getBlockNumber();
+      console.log("Using RPC:", url);
+      return provider;
+    } catch (err) {
+      console.warn("RPC failed:", url, err);
+      errors.push(`${url}: ${err}`);
     }
   }
-  const err = new Error(
+  throw new Error(
     "Could not reach any Polygon Amoy RPC. Network may be blocking RPC traffic."
   );
-  err.details = errors;
-  throw err;
 }
 
-/**
- * Resolve the Certificate contract via Registry.
- * Strategy:
- *  1) If MetaMask is on Amoy (80002) -> use signer (write enabled)
- *  2) Else try public RPCs (read only)
- *  3) If registry lookup fails on primary, retry on public RPCs as last resort
- */
-export async function resolveCertificate() {
-  let base = await getMetaMaskBase();
+// 🔧 Get MetaMask BrowserProvider if possible
+async function getMetaMaskBase() {
+  if (typeof window === "undefined") return null;
+  const anyWin = window;
+  if (!anyWin.ethereum) return null;
 
-  // Use MetaMask only when on 80002; otherwise ignore and go public read-only
-  if (!base || base.chainId !== 80002) {
-    base = await getPublicBase();
+  const provider = new ethers.BrowserProvider(anyWin.ethereum);
+  const net = await provider.getNetwork();
+  const chainId = Number(net.chainId);
+
+  return {
+    provider,
+    chainId
+  };
+}
+
+// 🔧 Main base provider
+export async function getBaseProvider() {
+  // Prefer MetaMask on Amoy for write actions
+  const mm = await getMetaMaskBase();
+  if (mm && mm.chainId === CHAIN_ID) {
+    return { provider: mm.provider, type: "metamask" };
   }
 
-  const { provider, chainId } = base;
+  // Fallback to public RPC (read only)
+  const rpcProvider = await createFallbackRpcProvider();
+  return { provider: rpcProvider, type: "rpc" };
+}
 
-  const registryAddress = registryMap[chainId];
+// 🔧 Registry contract from registry.json
+async function getRegistry(provider) {
+  const net = await provider.getNetwork();
+  const chainId = Number(net.chainId);
+  const registryAddress = registryMap[String(chainId)];
   if (!registryAddress) {
-    throw new Error(
-      `No Registry address for chain ${chainId}. Check src/registry.json.`
-    );
+    throw new Error(`No registry configured for chainId ${chainId}`);
   }
+  return new ethers.Contract(registryAddress, REGISTRY_ABI, provider);
+}
 
-  let registry = new ethers.Contract(registryAddress, REGISTRY_ABI, provider);
+// ✅ Main helper used by Single / Bulk / Verify
+export async function resolveCertificate() {
+  const { provider, type } = await getBaseProvider();
 
-  let certAddress;
-  try {
-    certAddress = await registry.getAddressByString("Certificate");
-  } catch (e) {
-    // In case a corporate network blocks this specific RPC, retry using public base
-    const pub = await getPublicBase();
-    registry = new ethers.Contract(registryAddress, REGISTRY_ABI, pub.provider);
-    certAddress = await registry.getAddressByString("Certificate");
-  }
+  // Read registry to find Certificate address
+  const registry = await getRegistry(provider);
+  const certAddress = await registry.getAddressByString("Certificate");
 
   if (!certAddress || certAddress === ethers.ZeroAddress) {
     throw new Error("Registry does not contain 'Certificate' address.");
   }
 
-  // If MetaMask is actually on Amoy, return with signer (so issue works)
-  const mm = await getMetaMaskBase();
-  if (mm && mm.chainId === 80002) {
-    const signer = await mm.provider.getSigner();
+  // If MetaMask on Amoy: use signer → can issue
+  if (type === "metamask") {
+    const signer = await provider.getSigner();
     return new ethers.Contract(certAddress, CERT_ABI, signer);
   }
 
-  // Otherwise return read-only (verify works; issuing asks MetaMask to switch)
+  // Otherwise read-only (verify still works)
   return new ethers.Contract(certAddress, CERT_ABI, provider);
 }

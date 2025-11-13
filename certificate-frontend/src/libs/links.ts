@@ -1,17 +1,16 @@
 // src/libs/links.ts
-// Central place for links we show in the UI
+import cfg from "../contract.json";
 
-/** Public IPFS gateway to preview an IPFS CID */
-export function gatewayUrl(cid: string) {
-  // you can swap to your favorite gateway here if you want
-  const base = "https://ipfs.io/ipfs";
-  return `${base}/${cid}`;
+// 🔗 Build IPFS gateway URL from CID
+export function gatewayUrl(cid: string): string {
+  // Free public gateway (may be a bit slow but zero cost)
+  return `https://ipfs.io/ipfs/${cid}`;
+  // You can change to e.g. https://gateway.pinata.cloud/ipfs/${cid} if you like
 }
 
-/** Block explorer URL for a transaction on Polygon Amoy */
-export function txUrl(tx: string) {
-  // if later you want to read from .env, replace the line below with:
-  // const base = (import.meta.env.VITE_EXPLORER || "https://amoy.polygonscan.com").replace(/\/$/, "");
-  const base = "https://amoy.polygonscan.com";
-  return `${base}/tx/${tx}`;
+// 🔗 Build transaction URL from tx hash
+export function txUrl(txHash: string): string {
+  // We assume contract.json has "explorer": "https://www.oklink.com/amoy"
+  // Most explorers use /tx/<hash> pattern
+  return `${cfg.explorer}/tx/${txHash}`;
 }

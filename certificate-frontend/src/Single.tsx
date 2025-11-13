@@ -1,79 +1,148 @@
 // src/Single.tsx
 import React, { useState } from "react";
+import { ethers } from "ethers";
 import { resolveCertificate } from "./ethers-client";
-import { pushIssued } from "./libs/store";         // <-- add
-import { gatewayUrl } from "./libs/links";         // optional if you show links somewhere
+import { pushIssued } from "./libs/store";
+import { gatewayUrl, txUrl } from "./libs/links";
 
 export default function Single() {
   const [name, setName] = useState("");
   const [course, setCourse] = useState("");
   const [className, setClassName] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [manualCid, setManualCid] = useState("");  // paste from IPFS Desktop here
+  const [studentWallet, setStudentWallet] = useState("");
+  const [cid, setCid] = useState("");
   const [status, setStatus] = useState("");
+  const [isError, setIsError] = useState(false);
 
   async function handleIssue() {
     try {
-      setStatus("Resolving contract...");
+      setIsError(false);
+
+      if (!name || !course || !className || !cid) {
+        setIsError(true);
+        setStatus("Please fill all fields and CID.");
+        return;
+      }
+
+      if (studentWallet && !ethers.isAddress(studentWallet)) {
+        setIsError(true);
+        setStatus("Student wallet address is invalid.");
+        return;
+      }
+
+      setStatus("Connecting to contract...");
       const cert = await resolveCertificate();
 
-      // we are in the "manual CID" mode again, so pick cid from input:
-      const cid = manualCid.trim();
-      if (!cid) { setStatus("❌ Please paste a CID from IPFS Desktop"); return; }
+      const issuedTo =
+        studentWallet && ethers.isAddress(studentWallet)
+          ? studentWallet
+          : ethers.ZeroAddress;
 
-      // If you want to compute a hash of file locally for integrity, do it here
-      // (you already had this earlier). For manual-CID flow we can skip.
+      setStatus("Sending transaction (please confirm in MetaMask)...");
+      const tx = await cert.addCertificate(
+        name,
+        course,
+        className,
+        cid,
+        issuedTo
+      );
 
-      setStatus("Sending transaction (MetaMask)...");
-      const tx = await cert.issueCertificate(name, course, cid, "0x" + "00".repeat(32));
+      setStatus("Waiting for confirmation...");
       const receipt = await tx.wait();
 
-      // persist for history
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      // ✅ THIS is your admin “database” entry
       pushIssued({
         cid,
         name,
         course,
-        className: className || undefined,
-        imageCid: cid,                      // show thumbnail from the same CID
-        txHash: receipt.hash,
-        issuedAt: Math.floor(Date.now() / 1000),
+        className,
+        imageCid: cid,        // certificate image CID (if you use IPFS)
+        txHash: receipt.hash, // blockchain tx (for admin only)
+        issuedAt: nowSec,
+        revoked: false,       // new cert is active
       });
 
-      setStatus(`✅ Issued!\nCID: ${cid}\nTx: ${receipt.hash}`);
-      // (Optional) clear fields:
-      // setName(""); setCourse(""); setClassName(""); setManualCid(""); setFile(null);
-    } catch (e: any) {
-      setStatus("❌ " + (e?.message || String(e)));
+      setStatus(
+        [
+          "✅ Certificate issued successfully!",
+          `CID: ${cid}`,
+          `Transaction: ${txUrl(receipt.hash)}`,
+          `Preview: ${gatewayUrl(cid)}`,
+        ].join("\n")
+      );
+
+      setName("");
+      setCourse("");
+      setClassName("");
+      setStudentWallet("");
+      setCid("");
+    } catch (err: any) {
+      console.error(err);
+      setIsError(true);
+      setStatus("Error issuing certificate: " + (err?.message ?? String(err)));
     }
   }
 
   return (
-    <section>
-      <h3>Single Certificate</h3>
+    <section className="card">
+      <h2>Teacher – Single Certificate</h2>
+      <p>Issue a single blockchain certificate and store it in Admin Issued.</p>
 
-      <div>Subject name</div>
-      <input value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="form-grid">
+        <label>
+          Student Name
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ali Raza"
+          />
+        </label>
 
-      <div>Course</div>
-      <input value={course} onChange={(e) => setCourse(e.target.value)} />
+        <label>
+          Course
+          <input
+            value={course}
+            onChange={(e) => setCourse(e.target.value)}
+            placeholder="Blockchain Fundamentals"
+          />
+        </label>
 
-      <div>Class (optional)</div>
-      <input value={className} onChange={(e) => setClassName(e.target.value)} />
+        <label>
+          Class / Batch
+          <input
+            value={className}
+            onChange={(e) => setClassName(e.target.value)}
+            placeholder="BSCS-8A"
+          />
+        </label>
 
-      <div>Image file (optional)</div>
-      <input type="file" onChange={(e)=> setFile(e.target.files?.[0] || null)} />
+        <label>
+          Student Wallet (optional)
+          <input
+            value={studentWallet}
+            onChange={(e) => setStudentWallet(e.target.value.trim())}
+            placeholder="0x..."
+          />
+        </label>
 
-      <div style={{marginTop:8}}>CID (paste from IPFS Desktop)</div>
-      <input value={manualCid} onChange={(e)=> setManualCid(e.target.value)} placeholder="bafy... or Qm..." />
-
-      <div style={{marginTop:8}}>
-        <button onClick={handleIssue}>Issue Certificate</button>
+        <label className="cid-field">
+          IPFS CID (certificate image / JSON)
+          <input
+            value={cid}
+            onChange={(e) => setCid(e.target.value.trim())}
+            placeholder="bafy... or Qm..."
+          />
+        </label>
       </div>
 
+      <button className="btn btn-primary" onClick={handleIssue}>
+        Issue Certificate
+      </button>
+
       {status && (
-        <pre style={{background:"#111",color:"#0f0",padding:10,whiteSpace:"pre-wrap",marginTop:10}}>
-          {status}
-        </pre>
+        <pre className={`status ${isError ? "error" : ""}`}>{status}</pre>
       )}
     </section>
   );
