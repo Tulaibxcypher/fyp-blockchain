@@ -1,71 +1,66 @@
-// src/Bulk.tsx
 import React, { useState } from "react";
 import { ethers } from "ethers";
 import { resolveCertificate } from "./ethers-client";
+import { pushIssued } from "./libs/store";
 
 export default function Bulk() {
-  const [rowsText, setRowsText] = useState("");
+  const [bulkText, setBulkText] = useState("");
   const [status, setStatus] = useState("");
-  const [isError, setIsError] = useState(false);
 
-  /*
-    Expected format (one per line):
-    name,course,className,cid,studentWallet
+  const handleIssue = async () => {
+    setStatus("");
 
-    Example:
-    Ali Raza,Blockchain,BSCS-8A,bafy123...,0x1234...
-    Hina Khan,AI,BSCS-8B,bafy456...,0x5678...
-  */
+    const lines = bulkText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
 
-  async function handleBulkIssue() {
-    try {
-      setIsError(false);
-      setStatus("Parsing input...");
+    if (lines.length === 0) {
+      setStatus("❗ Please paste at least one line.");
+      return;
+    }
 
-      const lines = rowsText
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0);
+    const names: string[] = [];
+    const courses: string[] = [];
+    const classes: string[] = [];
+    const cids: string[] = [];
+    const wallets: string[] = []; // will be all ZeroAddress
 
-      if (!lines.length) {
-        setIsError(true);
-        setStatus("Please paste at least one line.");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const parts = line.split(",").map((p) => p.trim());
+
+      // Expected format: name,course,className,cid
+      if (parts.length < 4) {
+        setStatus(
+          `❗ Line ${i + 1} is invalid. Expected format: name,course,className,cid`
+        );
         return;
       }
 
-      const names: string[] = [];
-      const courses: string[] = [];
-      const classes: string[] = [];
-      const cids: string[] = [];
-      const wallets: string[] = [];
+      const [name, course, className, cid] = parts;
 
-      for (const line of lines) {
-        const parts = line.split(",").map((p) => p.trim());
-        if (parts.length < 4) {
-          throw new Error("Each line must have at least 4 values.");
-        }
-        const [name, course, className, cid, wallet] = parts;
-
-        if (!name || !course || !className || !cid) {
-          throw new Error("Missing values in: " + line);
-        }
-
-        names.push(name);
-        courses.push(course);
-        classes.push(className);
-        cids.push(cid);
-
-        if (wallet && ethers.isAddress(wallet)) {
-          wallets.push(wallet);
-        } else {
-          wallets.push(ethers.ZeroAddress);
-        }
+      if (!name || !course || !cid) {
+        setStatus(
+          `❗ Line ${i + 1} is missing required fields (name, course, cid).`
+        );
+        return;
       }
 
-      setStatus("Connecting to contract...");
+      names.push(name);
+      courses.push(course);
+      classes.push(className || "");
+      cids.push(cid);
+      wallets.push(ethers.ZeroAddress); // no wallet support in bulk
+    }
+
+    try {
+      setStatus("⏳ Connecting to MetaMask...");
+
       const cert = await resolveCertificate();
 
-      setStatus("Sending bulk transaction (confirm in MetaMask)...");
+      setStatus("⏳ Sending bulk transaction...");
+
       const tx = await cert.addCertificates(
         names,
         courses,
@@ -73,40 +68,82 @@ export default function Bulk() {
         cids,
         wallets
       );
-      setStatus("Waiting for confirmation...");
-      await tx.wait();
 
-      setStatus("✅ Bulk certificates issued successfully!");
-    } catch (err: any) {
+      setStatus("⏳ Waiting for confirmation...");
+      const receipt = await tx.wait();
+
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      // Save each issued cert into Admin – Issued (local)
+      for (let i = 0; i < cids.length; i++) {
+        pushIssued({
+          cid: cids[i],
+          name: names[i],
+          course: courses[i],
+          className: classes[i] || "",
+          imageCid: cids[i],
+          txHash: receipt.hash,
+          issuedAt: nowSec,
+          revoked: false,
+        });
+      }
+
+      setStatus(
+        `✅ Successfully issued ${cids.length} certificates.
+Tx: ${receipt.hash}`
+      );
+
+      setBulkText("");
+    } catch (err) {
       console.error(err);
-      setIsError(true);
-      setStatus("Error in bulk issue: " + (err?.message ?? String(err)));
+      setStatus("❌ Error issuing bulk certificates.");
     }
-  }
+  };
 
   return (
-    <section className="card">
+    <div>
       <h2>Teacher – Bulk Certificates</h2>
       <p>
-        Paste multiple rows (name,course,className,cid,studentWallet). Wallet is
-        optional.
+        Paste multiple rows in this format:
+        <br />
+        <code>name,course,className,cid</code>
       </p>
 
       <textarea
-        rows={8}
-        value={rowsText}
-        onChange={(e) => setRowsText(e.target.value)}
-        placeholder="Ali Raza,Blockchain,BSCS-8A,bafy...,0x1234...
-Hina Khan,AI,BSCS-8B,bafy...,0x5678..."
+        style={{ marginTop: "10px", width: "400px", height: "160px" }}
+        placeholder={`Ali Raza,Blockchain Fundamentals,BSCS-8A,Qm...\nHina Khan,AI,BSCS-8B,Qm...`}
+        value={bulkText}
+        onChange={(e) => setBulkText(e.target.value)}
       />
 
-      <button className="btn btn-primary" onClick={handleBulkIssue}>
-        Issue All
-      </button>
+      <div>
+        <button
+          style={{
+            marginTop: "10px",
+            padding: "8px 18px",
+            background: "black",
+            color: "white",
+            borderRadius: "8px",
+          }}
+          onClick={handleIssue}
+        >
+          Issue All
+        </button>
+      </div>
 
       {status && (
-        <pre className={`status ${isError ? "error" : ""}`}>{status}</pre>
+        <pre
+          style={{
+            marginTop: "16px",
+            whiteSpace: "pre-wrap",
+            padding: "10px",
+            background: "#f8f8f8",
+            borderRadius: "8px",
+          }}
+        >
+          {status}
+        </pre>
       )}
-    </section>
+    </div>
   );
 }
