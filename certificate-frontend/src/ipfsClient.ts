@@ -1,64 +1,37 @@
 // src/ipfsClient.ts
-// Upload using Lighthouse (browser SDK) – super simple.
-// No env variables, no CLI, just one API key.
-
-// 1) Make sure you've run:  npm install @lighthouse-web3/sdk
 import lighthouse from "@lighthouse-web3/sdk";
 
-// 2) PASTE YOUR LIGHTHOUSE API KEY HERE
-//    Example: const LIGHTHOUSE_API_KEY = "lhk_abc123...";
+// 🔑 Your Lighthouse API key
+// (If you want, move this into .env later; for now keep it simple.)
 const LIGHTHOUSE_API_KEY = "e9db613b.c41d8208e5b54c6597b34d29ba24dcec";
 
 /**
- * Upload a single file to Lighthouse and return the CID string.
- * Name kept as uploadToIpfsFilebase so your existing Single.tsx still works.
+ * Upload a single file to Lighthouse IPFS and return its CID.
  */
 export async function uploadToIpfsFilebase(file: File): Promise<string> {
-  // Only check that it's not empty
-  if (!LIGHTHOUSE_API_KEY || LIGHTHOUSE_API_KEY.length === 0) {
-    throw new Error("Lighthouse API key is not set in ipfsClient.ts");
+  if (!file) {
+    throw new Error("No file provided for upload");
   }
 
-  // Optional: progress callback (for debugging / future use)
-  const progressCallback = (progressData: any) => {
-    try {
-      const percentageDone =
-        100 -
-        Number(
-          ((progressData?.total / progressData?.uploaded) * 100).toFixed(2)
-        );
-      console.log("Upload progress:", percentageDone, "%");
-    } catch {
-      // ignore
-    }
-  };
-
-  // 👇 IMPORTANT: Lighthouse expects an ARRAY of files, not a single File.
-  // So we wrap the file into [file].
+  // IMPORTANT: Lighthouse expects something iterable, so wrap File in an array
   const output = await lighthouse.upload(
-    [file],              // array with one file
-    LIGHTHOUSE_API_KEY,  // your API key
-    undefined,           // deal parameters (not needed for FYP)
-    progressCallback     // progress callback (optional)
+    [file],              // 👈 array with one File
+    LIGHTHOUSE_API_KEY   // 👈 your API key
   );
 
-  console.log("Lighthouse upload result:", output);
-
-  // The CID is usually in output.data.Hash
-  const cid: string | undefined = output?.data?.Hash;
-
-  if (!cid) {
-    throw new Error("Lighthouse upload failed: CID (Hash) missing in response");
+  if (!output || !output.data || !output.data.Hash) {
+    console.error("Unexpected Lighthouse upload response:", output);
+    throw new Error("Invalid response from Lighthouse upload");
   }
 
-  return cid;
+  // CID from Lighthouse
+  return String(output.data.Hash).trim();
 }
 
 /**
- * Build a gateway URL for previewing the CID.
- * Your UI already uses this.
+ * Build an IPFS gateway URL for a CID (Lighthouse gateway).
  */
 export function filebaseGatewayUrl(cid: string): string {
-  // You can also use https://gateway.lighthouse.storage/ipfs/${cid}
-  return `https://ipfs.io/ipfs/${cid}`;
+  if (!cid) return "";
+  return `https://gateway.lighthouse.storage/ipfs/${cid}`;
 }
